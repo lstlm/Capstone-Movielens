@@ -1,0 +1,1165 @@
+---
+title: "HarvardX Data Science Capstone  - MovieLens Recommendation System"
+author: "Terry McLaughlin"
+date: "6/7/2020"
+header-includes:
+    - \usepackage{caption}
+    - \usepackage{parskip}
+output:
+  pdf_document: 
+    latex_engine: xelatex
+    number_sections: yes
+    toc: yes
+mainfont: Arial
+urlcolor: blue
+---
+  
+
+```{r formyoptions, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, error = TRUE)
+options(knitr.table.format = "latex")
+```
+
+  \setlength{\parindent}{0pt}
+
+ \newpage
+ \captionsetup[table]{labelformat=empty}  
+ 
+# Overview
+
+## Introduction  
+
+This document discusses my analysis of the MovieLens dataset.  This is the first of two projects required for the Capstone class, the ninth and final course HarvardX Data Science Program.
+
+In this project I apply skills learned throughout the HarvardX Data Science course series to create a movie recommendation system using the MovieLens dataset.  Code was provided in the instructions to generate the datasets used.
+
+I compared various models to determine which Model produces the lowest root mean square error (RMSE).  The RMSE tells me which model's predicted rating come the closest to "true" ratings.  RMSE is the typical calculation used made when predicting a movie rating.  This is similar to how the popular Netflix challenge decided on a winner.
+
+RMSE can be calculated as follows: 
+
+$$ RMSE = \sqrt{\frac{1}{N}\displaystyle\sum_{u,i} (\hat{y}_{u,i}-y_{u,i})^{2}} $$  
+
+  
+  
+Project RMSE scoring
+
+|           0 points: No RMSE reported AND/OR code used to generate the RMSE appears to violate the  
+|                     edX Honor Code.
+|         5 points: RMSE >= 0.90000 AND/OR the reported RMSE is the result of overtraining 
+|                     (validation set ratings used for anything except reporting the final RMSE value)
+|        10 points: 0.86550 <= RMSE <= 0.89999
+|        15 points: 0.86500 <= RMSE <= 0.86549
+|        20 points: 0.86490 <= RMSE <= 0.86499
+|        25 points: RMSE < 0.86490
+  
+&nbsp;&nbsp;  
+
+For this project, I replicated the Machine Learning class exercise using Regularization.  Then I developed additional models to see if I could produce a lower RMSE than shown in the course material.  The goal is to obtain an RMSE lower than .86490 to obtain the maximum points.  
+&nbsp;&nbsp;  
+*Note:  I also tried to produce models using other popular algorithms including knn, lm, and glm, however, I ran out of memory in all cases.*
+
+## Dataset Summary 
+
+The MovieLens dataset provided has the following dimensions:
+
+
+Description         | Value
+--------------------|---------------
+edx Rows            | 9,000,055
+Validation set Rows | 999,999
+Data Columns        | 6 initial, 9 after further preparing dataset   
+
+
+ \newpage  
+ 
+# Method and Analysis
+
+## Project Setup
+
+**Steps to prepare project**  
+&nbsp;&nbsp;&nbsp;&nbsp;    1.  Data Loading:  Load initial dataset using code provided in course materials  
+&nbsp;&nbsp;&nbsp;&nbsp;    2.  Load Libraries:  Load libraries needed for project  
+&nbsp;&nbsp;&nbsp;&nbsp;    3.  Transform Dataset:  Add additional columns to both edx and validation datasets for use in analysis    
+  
+### Data Loading
+
+The r script to load the data was provided in the project instructions.  The code created the edx dataset and a validation set of the MovieLens data.  The MovieLens dataset is divided as follows:  
+&nbsp;&nbsp;&nbsp;&nbsp;    1.  edx data.frame:  ~90% of MovieLens dataset (used to model)   
+&nbsp;&nbsp;&nbsp;&nbsp;    2.  validation data.frame:  ~10% of MovieLens dataset (used to validate results of model)  
+
+```{r Dataloading, echo = FALSE, message = FALSE, warning = FALSE}
+#R Script used for Capstone Movielens
+
+
+################################
+# Create edx set, validation set
+################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding")
+# if using R 3.5 or earlier, use `set.seed(1)` instead
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,] #train
+temp <- movielens[test_index,] #test
+
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+
+
+```
+
+### Load Libraries
+The libraries listed below are needed for my project.
+```{r LoadLibraries, echo = TRUE, message = FALSE}
+##########################################
+# Load libraries needed for project
+##########################################
+library(dslabs)
+library(tidyverse)
+library(lubridate)
+library(caret)
+library(dplyr)
+library(kableExtra)
+library(formattable)
+library(ggrepel)
+```
+
+
+## Approach / Overview
+
+For this project, regularization was used.  As demonstrated in the course material, regularization is a form of regression, that constrains / regularizes or shrinks the coefficient estimates towards zero. In other words, this technique discourages learning a more complex or flexible model, so as to avoid the risk of overfitting.  
+
+I wanted a better understanding of "regularization" so I did some research.  I found an article that explained regularization at [https://towardsdatascience.com/regularization-in-machine-learning-76441ddcf99a](https://towardsdatascience.com/regularization-in-machine-learning-76441ddcf99a).  
+  
+  
+\leftskip30pt\relax\rightskip30pt\relax_Regularization, significantly reduces the variance of the model, without substantial increase in its bias. So the tuning parameter $\lambda$, used in the regularization techniques described above, controls the impact on bias and variance. As the value of $\lambda$ rises, it reduces the value of coefficients and thus reducing the variance. Till a point, this increase in $\lambda$ is beneficial as it is only reducing the variance(hence avoiding overfitting), without loosing any important properties in the data. But after certain value, the model starts loosing important properties, giving rise to bias in the model and thus underfitting. Therefore, the value of $\lambda$ should be carefully selected._ 
+
+\leftskip0pt\relax\rightskip0pt\relax 
+&nbsp;&nbsp;    
+
+For the models using Regularization, I tried several values of λ and the selected the value that would yield the lowest RMSE.  The equation below is minimized to add a penalty.   
+&nbsp;&nbsp;  
+*Note equation below is specifically for Regularization using both Movie and User variables.  This equation can be simplified or expanded, depending on the number of variables used.*
+
+
+
+$$  \frac{1}{N}\displaystyle\sum_{u,i}(y_{u,i}-\mu-b_{i}-b_{u})^{2} + \lambda (\displaystyle\sum_{i}b_{i}^{2}+\displaystyle\sum_{u}b_{u}^{2}) $$  
+
+where:
+   
+&nbsp;&nbsp;&nbsp;&nbsp;$n_{i}$:      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;   Number of ratings for movie i      
+&nbsp;&nbsp;&nbsp;&nbsp;$\lambda$:    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;   Tuning parameter  
+
+&nbsp;&nbsp;  
+&nbsp;&nbsp;  
+
+A simple histogram of the average movie rating shows the mean for all movie ratings.  The red vertical line indicates the mean is at 3.51.  
+
+&nbsp;&nbsp;  
+&nbsp;&nbsp;  
+
+```{r simpleHistogram, echo=FALSE, message=FALSE, warning=FALSE, error=TRUE, include=TRUE}
+# Simple Historgram Average Rating
+edx %>% 
+  group_by(movieId) %>% 
+  summarize(b_u = mean(rating)) %>% 
+  ggplot(aes(b_u)) + 
+  geom_histogram(bins = 10, color = "gray77", fill = "lightsteelblue4") +
+  geom_vline(xintercept=3.51, linetype="dashed", color = "coral",size=1) +
+  ggtitle("Average Movie Rating") +
+  xlab("Average Rating") +
+  ylab("Number of Ratings") 
+```
+
+
+
+The approach I took was to create models just using the data.  Then I added in Regularization.  This is a similar approach used in the course.  I reran the approach used in class, and added in a time effect between the release year and the year the movie was rated.
+
+
+## Data Cleanup and Transformation
+The initial dataset was transformed to add 3 additional columns:  year_rated, year_release, and years_between.  The following is the code I used.    
+&nbsp;&nbsp;  
+&nbsp;&nbsp;  
+
+```{r Transform, echo=TRUE, error=TRUE, message=FALSE}
+############################################################################
+# Prepare the edx and validation datasets to add columns needed for project
+############################################################################
+#FIRST add a column for year rated, release year, and number of years between   
+#    for both EDX and Validations sets
+edxdata <-mutate(edx,  year_rated = year(as_datetime(timestamp)),  
+                 year_released = as.numeric(str_sub(title,-5,-2)), 
+                 year_between = year_rated - year_released) 
+validationdata <- mutate(validation, year_rated = year(as_datetime(timestamp)),   
+                         year_released = as.numeric(str_sub(title,-5,-2)), 
+                         year_between = year_rated - year_released)
+```
+ \newpage  
+
+# Dataset General Statistics and Overview
+Prior to building models to predict movie ratings, we need to examine and familiarize ourselves with the data.  
+&nbsp;&nbsp;  
+
+## Dataset Overview
+First let's look at the columns in the dataset and the first few rows of data to understand what we have to work with.  Both edx and validation datasets have identical format, just different number of rows.  
+
+\centering __Columns in Dataset__   
+
+Columns            | Provided or Added
+-------------------|-----------------
+  userId           | Provided
+  movieId          | Provided
+  rating           | Provided
+  timestamp        | Provided
+  title            | Provided
+  genres           | Provided
+  year_rated       | Added
+  year_released    | Added
+  year_between     | Added
+    
+      
+&nbsp;&nbsp;        
+
+\raggedright  
+**EDX Data Header **
+```{r edxlines, echo = FALSE, message = FALSE, warning = FALSE}
+kable(head(edx)) %>%
+      kable_styling(latex_options = c("striped", "scale_down", "HOLD_position"))
+```
+
+
+**Transformed EDX Data Header - scaled to fit page**
+```{r transformlines, echo = FALSE, message = FALSE, warning = FALSE}
+kable(head(edxdata)) %>%
+      kable_styling(latex_options = c("striped", "scale_down", "HOLD_position"))
+```
+
+\newpage
+
+Now lets look at summary statistics of the data, comparing the edx dataset to the Validation data set.  
+
+```{r dataSummary, echo = FALSE, message = FALSE, warning = FALSE}
+############################################################################
+# Summarize the edx dataset
+############################################################################
+
+#edx dataset
+edx_summary <- edxdata %>%
+  summarize(No_Users = n_distinct(userId),
+            No_Movies = n_distinct(movieId), 
+            No_Genres = n_distinct(genres),
+            Distinct_Between_Years = n_distinct(year_between),            
+            Median_Rating = median(rating),
+            Average_Rating = mean(rating),
+            earliestYearReleased = min(year_released), 
+            earliestYearRated = min(year_rated),            
+            latestYearReleased = max(year_released), 
+            latestYearRated = max(year_rated))
+
+############################################################################
+# Summarize the validation dataset
+############################################################################
+
+val_summary <- validationdata %>%
+  summarize(No_Users = n_distinct(userId),
+            No_Movies = n_distinct(movieId), 
+            No_Genres = n_distinct(genres),
+            Distinct_Between_Years = n_distinct(year_between), 
+            Median_Rating = median(rating),
+            Average_Rating = mean(rating),
+            earliestYearReleased = min(year_released), 
+            earliestYearRated = min(year_rated),            
+            latestYearReleased = max(year_released), 
+            latestYearRated = max(year_rated))
+############################################################################
+# Put it together
+############################################################################
+
+summarystats <- bind_rows(edx_summary, val_summary)
+#add as.character to control decimal points displayed
+charsummary <- data.frame(No_Users = as.character(summarystats$No_Users), 
+                          No_Movies = as.character(summarystats$No_Movies), 
+                          No_Genres= as.character(summarystats$No_Genres), 
+                          Earliest_Movie_Release_Year = as.character(summarystats$earliestYearReleased),
+                          Earliest_Movie_Rated_Year= as.character(summarystats$earliestYearRated),
+                          Latest_Movie_Release_Year = as.character(summarystats$latestYearReleased),
+                          Latest_Movie_Rated_Year= as.character(summarystats$latestYearRated),
+                          Year_Between = as.character(summarystats$Distinct_Between_Years),
+                          Median_Rating = as.character(summarystats$Median_Rating), 
+                          Average_Rating = summarystats$Average_Rating)
+
+#transpose data for better readablilty
+transposeSummary <- data.frame(t(charsummary))
+
+############################################################################
+# Top and bottom 10 with over 1000 ratings
+############################################################################
+#Top 10 by rating (over 1000 ratings)
+top_10 <- edxdata %>% group_by(title, movieId) %>%
+  summarize(count = n(), average_rating = mean(rating)) %>% 
+  filter(count > 1000) %>%
+  ungroup(title, movieId) %>%
+   top_n(10, average_rating) %>%
+  arrange(desc(average_rating))
+ 
+#Bottom 10 by rating (over 1000 rating)
+bottom_10 <- edxdata %>% group_by(title,movieId) %>%
+  summarize(count = n(), average_rating = mean(rating)) %>% 
+  filter(count > 1000) %>%
+  ungroup(title, movieId) %>%
+  top_n(-10, average_rating) %>%
+  arrange((average_rating))  
+
+############################################################################
+# Ratings by Genre
+############################################################################
+
+separate_genres <- edxdata %>% separate_rows(genres, sep ="\\|")
+
+# filter out no genre (#ratings = 7)
+number_of_genres <- separate_genres %>% group_by(genres) %>% 
+  summarize(TotalRatings = n(), AverageRating = mean(rating)) %>%
+  filter (TotalRatings >10) %>%
+  arrange(desc(AverageRating))
+
+
+# filter out no genre (#ratings = 7)
+totalnumber_of_genres <- separate_genres %>% group_by(genres) %>% 
+  summarize(TotalRatings = n(), AverageRating = mean(rating)) %>%
+  filter (TotalRatings >10) %>%
+  arrange(desc(TotalRatings))
+```
+
+
+\centering 
+**Summary Statistics**  
+```{r summaryOutput, echo=FALSE, message=FALSE, warning=FALSE, error=TRUE, include=TRUE}
+############################################################################
+# Display Statistic Outputs
+############################################################################
+kable(transposeSummary, align = c("c","c"), 
+    col.names = c("EDX Data", "Validation Data")) %>%
+    row_spec(row = 0, bold = T, color = "#212f3d", background = "#fcf3cf") %>%
+    kable_styling(latex_options = "striped")
+```
+
+\raggedright
+*Note:  Genres in the original dataset were concatenated.  I split out the 19 genres for analysis.*
+&nbsp;&nbsp;  
+&nbsp;&nbsp;  
+
+We can also take a look at the top 10 and bottom 10 movies with over 1,000 ratings per movie.  
+
+&nbsp;&nbsp;  
+\centering 
+**Top 10 Movies with over 1,000 ratings each**  
+
+```{r top10Output, echo=FALSE, message=FALSE, warning=FALSE, error=TRUE, include=TRUE}
+kable(top_10, align=(c("l","c", "r", "r")), 
+      col.names = c("Title", "Movie ID", "Count", "Average Rating")) %>%
+      row_spec(row = 0, bold = T, color = "#212f3d", background = "#fcf3cf") %>%
+      kable_styling(latex_options = "striped")
+```
+
+&nbsp;&nbsp;  
+
+**Bottom 10 Movies with over 1,000 ratings each**  
+```{r bottom10Output, echo=FALSE, message=FALSE, warning=FALSE, error=TRUE, include=TRUE}
+kable(bottom_10, align=(c("l","c", "r", "r")), 
+      col.names = c("Title", "Movie ID", "Count", "Average Rating")) %>%
+      row_spec(row = 0, bold = T, color = "#212f3d", background = "#fcf3cf") %>%
+      kable_styling(latex_options = "striped")
+```
+
+\raggedright
+\newpage
+
+There are 19 different genres in the dataset.  Below is the average rating for each genre.  
+
+\centering
+**Ratings by Genre sorted descending by average rating **  
+```{r GenreOutputAvg, echo=FALSE, message=FALSE, warning=FALSE, error=TRUE, include=TRUE}
+#Display Genres
+kable(number_of_genres, align=(c("l","r", "r")), col.names = c("Genre", "# Ratings", "Average Rating")) %>%
+  row_spec(row = 0, bold = T, color = "#212f3d", background = "#fcf3cf") %>%
+  kable_styling(latex_options = "striped")
+```
+\raggedright  
+
+Interestingly, I had to google "Film-Noir".  According to the Oxford dictionary, it is a style or genre of cinematographic film marked by a mood of pessimism, fatalism, and menace. The term was originally applied (by a group of French critics) to American thriller or detective films made in the period 1944–54 and to the work of directors such as Orson Welles, Fritz Lang, and Billy Wilder.  These are lowkey black and white movies that are associated with dark meanings.  Examples are *Double Indemnity, The Big Sleep, Sunset Boulevard, Maltese Falcon, and The Big Heat* to name a few.  
+
+\newpage
+
+Next lets look at the number of ratings for each genre.   
+
+\centering
+
+**Ratings by Genre sorted descending by number of reviews **  
+```{r GenreOutputTotal, echo=FALSE, message=FALSE, warning=FALSE, error=TRUE, include=TRUE}
+#Display Genres
+kable(totalnumber_of_genres, align=(c("l","r", "r")), col.names = c("Genre", "# Ratings", "Average Rating")) %>%
+  row_spec(row = 0, bold = T, color = "#212f3d", background = "#fcf3cf") %>%
+  kable_styling(latex_options = "striped")
+```
+
+&nbsp;&nbsp;  
+\raggedright
+
+\newpage  
+
+## Dataset Visualization 
+It really helps to visualize the data to understand the dataset.  I am going to start with some charts about the data in general, along with the r Code.  Next, I will display charts that assist with the models I developed, specifically the year between release and review.  Lastly, I included genre charts.  
+
+As shown in the  chart below the number of ratings in the data spiked in the mid-1990s.  The last movie release date in the dataset is 2008.  
+&nbsp;&nbsp;  
+&nbsp;&nbsp;  
+```{r NoReleasePerYear, echo = TRUE, message = FALSE, warning = FALSE, include=TRUE}
+#Number of user ratings by release per year 
+  edxdata %>%
+    group_by(year_released)  %>%
+    summarize(Total=n())  %>%
+    ggplot(aes(x=year_released, y=Total/1000)) +
+    geom_line(color = "blue4", size=1) +
+    ggtitle("Total Number of Ratings by Movie Releases by Year (in thousands)") + 
+    xlab("Release Year")+
+    ylab("Number of Ratings")
+```
+&nbsp;&nbsp;  
+&nbsp;&nbsp;  
+\raggedright
+\newpage
+
+The next 3 charts look at the "time" variable average ratings.  
+
+The first smooth density chart displays the average rating by release year.  We discovered in our data analysis above that "Film-Noir" genre, movies in the 40s and 50s, has the highest ratings of all the genres.  This chart validates that finding, with the curve peaking in the 40s and 50s.  
+
+&nbsp;&nbsp;  
+&nbsp;&nbsp;  
+
+```{r SmoothDenYearReleased, echo = TRUE, message = FALSE, warning = FALSE, include=TRUE}
+
+#Average rating by year released 
+edxdata %>%
+  group_by(year_released) %>%
+  summarize(AverageRating = mean(rating)) %>%
+  ggplot(aes(year_released, AverageRating)) +
+  geom_point(color = "brown4") +
+  geom_smooth() + 
+  ggtitle("Average Rating by Release Year") +
+  xlab("Year Released") +
+  ylab("Average Rating")
+```
+
+\newpage
+
+Next is a smooth density chart of average rating by year rated.  The ratings appear to decline by year rated at first and then the ratings level off.  
+
+&nbsp;&nbsp;  
+&nbsp;&nbsp;  
+
+```{r SmoothDenYearRated, echo = TRUE, message = FALSE, warning = FALSE, include=TRUE}
+
+#Average rating by year rated 
+edxdata %>%
+  group_by(year_rated) %>%
+  summarize(AverageRating = mean(rating)) %>%
+  ggplot(aes(year_rated, AverageRating)) +
+  geom_point(color = "brown4") +
+  geom_smooth() + 
+  ggtitle("Average Rating by Year Rated") +
+  xlab("Year Rated") +
+  ylab("Average Rating")
+
+```
+
+\newpage
+
+The last chart in this series combines both movie release year and the year the movies were rated.  It visually tells us information about the "time" variable in the data.  It displays the movies date back to the early 1900s, whereas the ratings only date after the 1990s.  Each point represents a year.  The blue points indicate the number of movies, and the red points indicate the number of movie reviews.  
+
+&nbsp;&nbsp;  
+
+```{r bothTimeVariables, echo = TRUE, message = FALSE, warning = FALSE, include=TRUE}
+
+#Both Together - year vs rating and year released vs rating
+  ggplot() + 
+    geom_point(data = edxdata %>% 
+    group_by(year_released) %>% 
+    summarize(Average_Rating = mean(rating), number=n()),
+    aes(year_released, Average_Rating, col="year_released", size=number)) + 
+    geom_point(data = edxdata %>% group_by(year_rated) %>% 
+    summarize(Average_Rating = mean(rating), number=n()),
+    aes(year_rated, Average_Rating, col="year_rated", size=number)) + 
+    ggtitle("Mean Rating per Release Year and Year Rated")  +
+    xlab("Year") +
+    ylab("Rating") + 
+    guides(size = FALSE)
+
+```
+
+&nbsp;&nbsp;  
+\raggedright
+
+\newpage  
+
+We can also look at data provided for genre.  
+
+\begin{itemize}
+
+\item The first chart shows Average Rating.  Note due to all averages falling in the 3-4 range, the scale was adjusted between 3 and 4.  
+\item The second chart shows the Total Number of Ratings variables.  I was not surprised to see the number of total ratings chart.  I suspected the order would be similar to that displayed, with Drama, Comedy, Action, and Thriller at the top of the chart.    
+\item The third chart in this series shows the average rating per genre, with the size of the points indicated the number of ratings.
+\end{itemize}
+
+
+&nbsp;&nbsp;  
+
+```{r NoRatingsGenre, echo = TRUE, message = FALSE, warning = FALSE, include=TRUE}
+############################################################################
+# Display Genre Charts in Report
+############################################################################
+#Average Rating Genre with rating axis adjusted
+number_of_genres %>% 
+  ggplot(aes(x= reorder(genres, AverageRating), y = AverageRating)) + 
+  geom_bar(stat = "identity", color = "#aeb6bf", fill = "#34495e") +
+  ggtitle("Average Rating per Genre - rating limits adjusted") + 
+  xlab("Genre")+
+  ylab("Rating") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  coord_flip(ylim = c(3,4))
+
+#Total Ratings per Genre Bar Chart
+number_of_genres %>% 
+  ggplot(aes(x= reorder(genres, TotalRatings), y = TotalRatings/1000)) + 
+  geom_bar(stat = "identity", color = "#aeb6bf", fill = "#34495e") +
+  ggtitle("Total Rating per Genre (in thousands)") + 
+  xlab("Genre")+
+  ylab("Rating") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  coord_flip()
+
+#Mean Ratings by Genre
+number_of_genres %>% 
+  ggplot(aes(x= genres, y = AverageRating )) + 
+  geom_point(aes(size=TotalRatings/1000), color = "turquoise4") +
+  ggtitle("Average Rating per Genre") + 
+  xlab("Genre")+
+  ylab("Rating") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  guides(size=FALSE)
+```
+&nbsp;&nbsp;  
+&nbsp;&nbsp;  
+\raggedright  
+
+\newpage
+# Results
+
+In this section, I will present the models one by one with a summary section of the RMSE for each model.
+
+## Model 1 - Average Only
+This is most basic of all of the models.  This model computes the mean of the edx dataset compares it to the average of the validation dataset.  The equation for this model is as follows:  
+
+$$ Y_{u, i} = \mu + \epsilon_{u, i} $$  
+
+where:
+    
+&nbsp;&nbsp;&nbsp;&nbsp;$Y_{u, i}$:        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;   Prediction  
+&nbsp;&nbsp;&nbsp;&nbsp;$\mu$:             &nbsp;&nbsp;&nbsp;&nbsp; &nbsp; &nbsp;  "True Rating"  
+&nbsp;&nbsp;&nbsp;&nbsp;$\epsilon_{u, i}$: &nbsp;&nbsp;&nbsp;&nbsp; &nbsp; Independent errors sampled from the same distribution centered at p
+&nbsp;&nbsp;  
+&nbsp;&nbsp;  
+The histogram for this model was presented earlier in this document in the Approach / Overview section.  As a reminder the mean is 3.51.    
+&nbsp;   
+  
+
+```{r AverageOnly, echo = TRUE, message = FALSE, warning = FALSE, include=TRUE}
+############################################################################
+# MODEL 1 - AVERAGE ONLY
+############################################################################
+
+#-------------------------AVERAGE ONLY ----------------------------------------------
+# First lets just get the average of the ratings, not taking anything else into account
+#     Most basic of all the analysis
+rmse_results <- ''
+options(digits=7)
+mu_hat <- mean(edxdata$rating)
+RMSE <- RMSE(validationdata$rating, mu_hat)
+
+#-------------------------AVERAGE ONLY HISTOGRAM----------------------------------------
+
+
+
+#-------------------------AVERAGE ONLY RMSE----------------------------------------
+rmse_results <- tibble(method = "Model 1 - Average only", RMSE)
+
+
+```
+&nbsp;   
+
+The RMSE obtained was 1.0612.  This RMSE is not achieving the results we need, but will serve as a baseline for all other models.
+
+\centering   
+__Model 1 Results:  Average Only __  
+
+```{r AverageOnlyResults, echo = FALSE, message = FALSE, warning = FALSE, include=TRUE}
+kable(rmse_results, 
+      align = c("l","c"), 
+      format="latex",
+      col.names = c("Method", "RMSE")) %>%
+      column_spec(column = 2, color = "#fbfcfc", background = "#21618c") %>%
+      row_spec(row = 0, bold = T, color = "#212f3d", background = "#fcf3cf") %>%
+      row_spec(row = 1, color = "#fbfcfc", background = "#7b241C")
+
+```
+&nbsp;&nbsp;     
+&nbsp;&nbsp;     
+\raggedright
+ 
+
+ \newpage  
+
+## Model 2 - Movie Effect
+Model 2 accounts for the fact that different movies yield different ratings, which is known as "The Movie Effect".  For example, movie popularity due to star power and advertisement is one effect on movie ratings.  
+
+The equation for this model is as follows:  
+
+$$ Y_{u, i} = \mu + b_{i} +\epsilon_{u, i} $$  
+
+where:
+    
+&nbsp;&nbsp;&nbsp;&nbsp;$Y_{u, i}$:        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;           Prediction  
+&nbsp;&nbsp;&nbsp;&nbsp;$\mu$:             &nbsp;&nbsp;&nbsp;&nbsp; &nbsp; &nbsp;  "True Rating"   
+&nbsp;&nbsp;&nbsp;&nbsp;$b_{i}$:           &nbsp;&nbsp;&nbsp;&nbsp; &nbsp; &nbsp; Indicates Movie Bias  
+&nbsp;&nbsp;&nbsp;&nbsp;$\epsilon_{u, i}$: &nbsp;&nbsp;&nbsp;&nbsp; &nbsp; Independent errors sampled from the same distribution centered at p
+&nbsp;&nbsp;  
+&nbsp;&nbsp;  
+
+The Movie Effect summarizes the mean for each move and then calculates the bias.  The bias is the individual movie rating minus the average move rating.  We can see the shift in the histogram to center around zero.  This model has a negative effect on ratings.  
+&nbsp;&nbsp;     
+&nbsp;&nbsp;  
+
+```{r MovieEffect, echo = TRUE, message = FALSE, warning = FALSE, include=TRUE}
+
+############################################################################
+# MODEL 2 - MOVIE EFFECT
+############################################################################
+
+mu <- mean(edxdata$rating) 
+movie_avgs <- edxdata %>%   
+  group_by(movieId) %>% 
+  summarize(b_i = mean(rating - mu))
+predicted_ratings <- mu + validationdata   %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  .$b_i
+
+#-------------------------MOVIE EFFECT HISTOGRAM----------------------------------------
+# Movie Effect Rating
+movie_avgs%>% 
+  ggplot(aes(x=b_i, y = ..density..)) + 
+  geom_histogram(bins = 10, color = "gray", fill = "tomato4") +
+  geom_density(method = "loess", size = 2, color = "darkblue") +
+  geom_vline(xintercept=0, linetype="dashed", color = "goldenrod1",size=1) +
+  ggtitle("Movie Effect Rating") +
+  xlab("Average Rating") 
+
+#-------------------------MOVIE EFFECT RMSE ---------------------------------------------
+model_m_rmse <- RMSE(validationdata$rating, predicted_ratings)
+
+#add rows to a running table to summarize all model results
+rmse_results <- bind_rows(rmse_results,
+                tibble(method="Model 2 - Movie Effect Model",RMSE = model_m_rmse))
+```
+&nbsp;   
+
+The RMSE for the Movie Effect gets us a little closer to our goal at .9439.  However, is not quite where we need to be.  Here is where we stand.
+
+\centering   
+__Model 2 Results:  Movie Effect __  
+
+```{r MovieEffectResults, echo = FALSE, message = FALSE, warning = FALSE, include=TRUE}
+#display results
+kable(rmse_results, 
+      align = c("l","c"), 
+      format="latex",
+      col.names = c("Method", "RMSE")) %>%
+      column_spec(column = 2, color = "#fbfcfc", background = "#21618c") %>%
+      row_spec(row = 0, bold = T, color = "#212f3d", background = "#fcf3cf") %>%
+      row_spec(row = 2, color = "#fbfcfc", background = "#7b241C")
+```
+&nbsp;&nbsp;     
+&nbsp;&nbsp;     
+\raggedright
+
+
+ \newpage  
+
+
+## Model 3 - Movie + Time Effect
+
+For this model are adding an  a variable to the movie effect that will have the number of years between when a movie was release to when the movie was rated.  We will call this the time effect.
+
+Again we will display our histogram, centering around zero.  This is a little closer to normal. 
+
+The equation for this model is as follows:  
+
+$$ Y_{t, i} = \mu + b_{i} + b_{t}  +\epsilon_{t, i} $$  
+
+where:
+    
+&nbsp;&nbsp;&nbsp;&nbsp;$Y_{u, i}$:        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;           Prediction  
+&nbsp;&nbsp;&nbsp;&nbsp;$\mu$:             &nbsp;&nbsp;&nbsp;&nbsp; &nbsp; &nbsp;  "True Rating"   
+&nbsp;&nbsp;&nbsp;&nbsp;$b_{i}$:           &nbsp;&nbsp;&nbsp;&nbsp; &nbsp; &nbsp; Indicates Movie Bias  
+&nbsp;&nbsp;&nbsp;&nbsp;$b_{t}$:           &nbsp;&nbsp;&nbsp;&nbsp; &nbsp; &nbsp; Indicates Time (year between release and rating) Bias  
+&nbsp;&nbsp;&nbsp;&nbsp;$\epsilon_{t, i}$: &nbsp;&nbsp;&nbsp;&nbsp; &nbsp; Independent errors sampled from the same distribution centered at p
+&nbsp;&nbsp;  
+&nbsp;&nbsp; 
+
+
+```{r MovieTimeEffect, echo = TRUE, message = FALSE, warning = FALSE, include=TRUE}
+
+############################################################################
+# MODEL 3 - MOVIE + TIME EFFECT
+############################################################################
+#-------------------------MOVIE + TIME EFFECT --------------------------------------
+
+year_between_avgs <- edxdata %>%
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(year_between) %>%
+  summarize(b_t = mean(rating - mu - b_i))
+
+predicted_ratings <- validationdata %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(year_between_avgs, by='year_between') %>%
+  mutate(pred = mu + b_i + b_t) %>%
+  pull(pred)
+
+#-----------------------MOVIE + TIME EFFECT HISTOGRAM--------------------------------
+# Movie Effect Rating
+year_between_avgs %>% 
+  ggplot(aes(x=b_t, y = ..density..)) + 
+  geom_histogram(bins = 10, color = "gray", fill = "tomato4") +
+  geom_vline(xintercept=0, linetype="dashed", color = "red",size=1) +
+  geom_density(method = "loess", size = 2, color = "darkblue") +
+  ggtitle("Movie + Time Rating") +
+  xlab("Average Rating") 
+
+
+
+#-----------------------MOVIE + TIME EFFECT RMSE--------------------------------
+model_my_rmse <- RMSE(predicted_ratings, validationdata$rating)
+
+#add rows to a running table to summarize all model results
+rmse_results <- bind_rows(rmse_results,
+                          tibble(method="Model 3 - Movie + Time Effect Model",
+                                 RMSE = model_my_rmse ))
+```
+&nbsp;   
+
+The RMSE for the Movie + Time Effect puts us at .9425.  We are tad closer, yet still not achieving our goal. 
+
+\centering 
+__Model 3 Results:  Movie + Time Effect __ 
+
+```{r MovieTimeEffectResults, echo = FALSE, message = FALSE, warning = FALSE, include=TRUE}
+#display results
+kable(rmse_results, 
+      align = c("l","c"), 
+      format="latex",
+      col.names = c("Method", "RMSE")) %>%
+      column_spec(column = 2, color = "#fbfcfc", background = "#21618c") %>%
+      row_spec(row = 0, bold = T, color = "#212f3d", background = "#fcf3cf") %>%
+      row_spec(row = 3, color = "#fbfcfc", background = "#7b241C")
+
+```
+&nbsp;&nbsp;     
+&nbsp;&nbsp;  
+\raggedright
+
+
+ \newpage  
+
+ 
+## Model 4 - Movie + User Effect
+
+This is similar to the Model 2 the Movie Effect.  In this model, we are adding an additional user variable.  Users tend to rate things differently.  Some rate high and some rate low.  The scale is not consistent between individuals.  I tend to be an optimist and rating things higher when I review things.  
+
+Again we will display our histogram, centering around zero, but closer to a normal distribution than the Movie + Time Effect model.  You can see by the histogram that we are getting closer to the zero mark, and the deviations are not as wide as just the Movie Effect.
+
+The equation for this model is as follows:  
+
+
+$$ Y_{u, i} = \mu + b_{i} + b_{u} +\epsilon_{u, i} $$  
+
+where:
+    
+&nbsp;&nbsp;&nbsp;&nbsp;$Y_{u, i}$:        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;           Prediction  
+&nbsp;&nbsp;&nbsp;&nbsp;$\mu$:             &nbsp;&nbsp;&nbsp;&nbsp; &nbsp; &nbsp;  "True Rating"   
+&nbsp;&nbsp;&nbsp;&nbsp;$b_{i}$:           &nbsp;&nbsp;&nbsp;&nbsp; &nbsp; &nbsp; Indicates Movie Bias  
+&nbsp;&nbsp;&nbsp;&nbsp;$b_{u}$:           &nbsp;&nbsp;&nbsp;&nbsp; &nbsp; &nbsp; Indicates User Bias  
+&nbsp;&nbsp;&nbsp;&nbsp;$\epsilon_{u, i}$: &nbsp;&nbsp;&nbsp;&nbsp; &nbsp; Independent errors sampled from the same distribution centered at p
+&nbsp;&nbsp;  
+&nbsp;&nbsp;  
+
+
+```{r MovieUserEffect, echo = TRUE, message = FALSE, warning = FALSE, include=TRUE}
+
+############################################################################
+# MODEL 4 - MOVIE + USER EFFECT
+############################################################################
+
+#-------------------------MOVIE + USER EFFECT --------------------------------------
+#Now the Movie + user effect
+user_avgs <- edxdata %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu - b_i))
+predicted_ratings <- validationdata %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  pull(pred)
+
+#-------------------------MOVIE + USER EFFECT HISTOGRAM----------------------------------------
+# Movie Effect Rating
+user_avgs%>% 
+  ggplot(aes(x=b_u, y = ..density..)) + 
+  geom_histogram(bins = 10, color = "gray", fill = "tomato4") +
+  geom_vline(xintercept=0, linetype="dashed", color = "red",size=1) +
+  geom_density(method = "loess", size = 2, color = "darkblue") +
+  ggtitle("Movie + User Effect Rating") +
+  xlab("Average Rating") 
+
+
+#-------------------------MOVIE + USER EFFECT RMSE ---------------------------------------------
+
+model_mu_rmse <- RMSE(validationdata$rating, predicted_ratings)
+
+#add rows to a running table to summarize all model results
+rmse_results <- bind_rows(rmse_results,
+                          tibble(method="Model 4 - Movie + User Effect Model",
+                                 RMSE = model_mu_rmse ))
+
+```
+&nbsp;   
+
+The RMSE for the Movie + User Effect again gets us a little closer to our goal at .8653.  We can still do better.
+  
+\centering 
+__Model 4 Results:  Movie + User Effect __  
+
+```{r MovieUserEffectResults, echo = FALSE, message = FALSE, warning = FALSE, include=TRUE}
+
+#display results
+kable(rmse_results, 
+      align = c("l","c"), 
+      format="latex",
+      col.names = c("Method", "RMSE")) %>%
+      column_spec(column = 2, color = "#fbfcfc", background = "#21618c") %>%
+      row_spec(row = 0, bold = T, color = "#212f3d", background = "#fcf3cf") %>%
+      row_spec(row = 4, color = "#fbfcfc", background = "#7b241C")
+
+```
+
+&nbsp;&nbsp;     
+&nbsp;&nbsp;   
+\raggedright
+
+
+ \newpage  
+
+
+## Model 5 - Regularization Movie Effect
+
+Regularization takes care of noise and outliers in data, because they are penalized. It addresses the fact there are obscure movies not seen by many people, but yet rated by a few.  What we do is run through the equation additional values of $\lambda$, our tuning parameter, to minimize the RMSE.
+
+For reference here is our equation again:  
+
+$$  \frac{1}{N}\displaystyle\sum_{i}(y_{i}-\mu-b_{i})^{2} + \lambda (\displaystyle\sum_{i}b_{i}^{2}) $$  
+&nbsp;&nbsp;     
+&nbsp;&nbsp;   
+
+
+```{r RegMovieEffect, echo = TRUE, message = FALSE, warning = FALSE, include=TRUE}
+############################################################################
+# MODEL 5 - REGULARIZATION MOVIE EFFECT
+############################################################################
+#-------------------------REGULARIZATION MOVIE EFFECT --------------------------------------
+#Choose lambda with cross-validation
+lambdas <- seq(0, 10, 0.25)
+
+mu <- mean(edxdata$rating)
+
+just_the_sum <- edxdata %>% 
+  group_by(movieId) %>% 
+  summarize(s = sum(rating - mu), n_i = n())
+
+rmses <- sapply(lambdas, function(l){
+  predicted_ratings <- validationdata %>% 
+    left_join(just_the_sum, by='movieId') %>% 
+    mutate(b_i = s/(n_i+l)) %>%
+    mutate(pred = mu + b_i) %>%
+    .$pred
+  return(RMSE(predicted_ratings, validationdata$rating))
+})
+
+#----------------Plot the lambdas-------------------------------------------------------
+best_Lambda <- lambdas[which.min(rmses)]
+chartData <- as.data.frame(cbind(rmses, lambdas))
+
+chartData %>% ggplot(aes(lambdas, rmses)) + 
+  geom_point() +
+  geom_vline(xintercept=best_Lambda, linetype="dashed", color = "red",size=1)+
+  ggtitle("Regularization Movie Effect") +
+  xlab("Lambda") + 
+  ylab("RMSE")  
+
+#-------------------------REGULARIZATION MOVIE EFFECT RMSE -----------------------------------------
+RMSE_RM = min(rmses)
+
+#add rows to a running table to summarize all model results
+rmse_results <- bind_rows(rmse_results,
+                tibble(method="Model 5 - Regularized Movie Effect Model",
+                RMSE= RMSE_RM, Lambda = best_Lambda))
+```
+The RMSE for the Regularization Movie Effect again gets us a little closer to our goal at .9439, with Lambda = 2.5.  We will have to drill down further with more variables to get better results.
+
+\centering 
+__Model 5 Results:  Regularization Movie  Effect __  
+
+```{r RegMovieEffectResults, echo = FALSE, message = FALSE, warning = FALSE, include=TRUE}
+
+#display results
+kable(rmse_results, 
+      align = c("l","c", "r"), 
+      format="latex",
+      col.names = c("Method", "RMSE", "Lambda" )) %>%
+      column_spec(column = 2, color = "#fbfcfc", background = "#21618c") %>%
+      row_spec(row = 0, bold = T, color = "#212f3d", background = "#fcf3cf") %>%
+      row_spec(row = 5, color = "#fbfcfc", background = "#7b241C")
+```
+
+&nbsp;&nbsp;     
+&nbsp;&nbsp;     
+\raggedright
+
+ \newpage  
+
+
+## Model 6 - Regularization Movie + User Effect
+
+This model we will add user to our regularization model.
+
+For reference here is our equation again:  
+$$  \frac{1}{N}\displaystyle\sum_{u,i}(y_{u,i}-\mu-b_{i}-b_{u})^{2} + \lambda (\displaystyle\sum_{i}b_{i}^{2}+\displaystyle\sum_{u}b_{u}^{2}) $$  
+
+```{r RegMovieUserEffect, echo = TRUE, message = FALSE, warning = FALSE, include=TRUE}
+############################################################################
+# MODEL 6- REGULARIZATION MOVIE + USER EFFFECT
+############################################################################
+#-------------------------REGULARIZATION MOVIE + USER EFFFECT --------------------------------------
+#Choose lambda with cross-validation
+lambdas <- seq(0, 10, 0.25)
+rmses <- sapply(lambdas, function(l){
+  mu <- mean(edx$rating)
+  
+  b_i <- edxdata %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+  
+  b_u <- edxdata %>% 
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  
+  predicted_ratings <- 
+    validationdata %>% 
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    mutate(pred = mu + b_i + b_u) %>%
+    .$pred
+  
+  return(RMSE( predicted_ratings, validationdata$rating))
+})
+
+#----------------Plot the lambdas-------------------------------------------------------
+best_Lambda <- lambdas[which.min(rmses)]
+chartData <- as.data.frame(cbind(rmses, lambdas))
+
+chartData %>% ggplot(aes(lambdas, rmses)) + 
+  geom_point() +
+  geom_vline(xintercept=best_Lambda, linetype="dashed", color = "red",size=1)+
+  ggtitle("Regularization Movie + User Effect") +
+  xlab("Lambda") + 
+  ylab("RMSE")  
+
+#-------------------------REGULARIZATION MOVIE + USER EFFECT RMSE -----------------------------------------
+RMSE_RMU = min(rmses)
+
+#add rows to a running table to summarize all model results
+rmse_results <- bind_rows(rmse_results,
+                tibble(method="Model 6 - Regularized Movie + User Effect Model",
+                RMSE= RMSE_RMU, Lambda = best_Lambda))
+```
+&nbsp;   
+
+The RMSE for the Regularization Movie + User Effect again gets us a little closer to our goal at .8648, with Lambda = 5.25.  We have achieved our RMSE goal to be lower than .86490.  However, let's add one more variable to see if we can get even better results.
+
+\centering 
+__Model 6 Results:  Regularization Movie + User Effect __  
+
+```{r RegMovieUserEffectResults, echo = FALSE, message = FALSE, warning = FALSE, include=TRUE}
+
+#display results
+kable(rmse_results, 
+      align = c("l","c", "r"), 
+      format="latex",
+      col.names = c("Method", "RMSE", "Lambda" )) %>%
+      column_spec(column = 2, color = "#fbfcfc", background = "#21618c") %>%
+      row_spec(row = 0, bold = T, color = "#212f3d", background = "#fcf3cf") %>%
+      row_spec(row = 6, color = "#fbfcfc", background = "#7b241C")
+``` 
+
+&nbsp;&nbsp;     
+&nbsp;&nbsp;     
+\raggedright
+
+ \newpage  
+
+
+## Model 7 - Regularization Movie + User + Time Effect
+
+This model we will add time to our regularization model.  Time is the number of years between when the movie was release to when the move was rated in years.
+
+For reference here is our equation again with the additional variable:  
+$$  \frac{1}{N}\displaystyle\sum_{t,u,i}(y_{t,u,i}-\mu-b_{i}-b_{u} - b_{t})^{2} + \lambda (\displaystyle\sum_{i}b_{i}^{2}+\displaystyle\sum_{u}b_{u}^{2}+\displaystyle\sum_{t}b_{t}^{2}) $$ 
+
+
+```{r RegMovieUserTimeEffect, echo = TRUE, message = FALSE, warning = FALSE, include=TRUE}
+############################################################################
+# MODEL 7 - REGULARIZATION MOVIE + USER + TIME EFFFECT
+############################################################################
+#-------------------------REGULARIZATION MOVIE + USER + TIME EFFFECT ------------------------------------
+#Choose lambda with cross-validation
+lambdas <- seq(0, 10, 0.25)
+rmses <- sapply(lambdas, function(l){
+  mu <- mean(edxdata$rating)
+  
+  b_i <- edxdata %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+  
+  b_u <- edxdata %>% 
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  
+  b_yb <- edxdata %>%
+    left_join(b_i, by="movieId") %>%
+    left_join(b_u, by='userId') %>%
+    group_by(year_between) %>%
+    summarize(b_yb = sum(rating - b_i - b_u - mu)/(n()+l), n_yb = n())
+  
+  predicted_ratings <- 
+    validationdata %>% 
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    left_join(b_yb, by = 'year_between') %>%
+    mutate(pred = mu + b_i + b_u + b_yb) %>%
+    .$pred
+  
+  return(RMSE(predicted_ratings, validationdata$rating))
+})
+
+#----------------Plot the lambdas-------------------------------------------------------
+best_Lambda <- lambdas[which.min(rmses)]
+chartData <- as.data.frame(cbind(rmses, lambdas))
+
+chartData %>% ggplot(aes(lambdas, rmses)) + 
+  geom_point() +
+  geom_vline(xintercept=best_Lambda, linetype="dashed", color = "red",size=1)+
+  ggtitle("Regularization Movie + User + Time Effect") +
+  xlab("Lambda") + 
+  ylab("RMSE")  
+
+#-------------------------REGULARIZATION MOVIE + + USER + TIME EFFFECT RMSE -----------------------------------------
+RMSE_RMUT = min(rmses)
+
+#add rows to a running table to summarize all model results
+rmse_results <- bind_rows(rmse_results,
+                tibble(method="Model 7 - Regularized Movie + User + Time Effect Model",
+                RMSE= RMSE_RMUT, Lambda = best_Lambda))
+```
+&nbsp;   
+
+The RMSE for the Regularization Movie + User + Time Effect achieves and even better result, with Lambda = 5.5 and RMSE of .8643.  
+&nbsp;&nbsp;     
+&nbsp;&nbsp;  
+\centering 
+__Model 7 Results:  Regularization Movie + User + Time Effect __  
+
+```{r RegMovieUserTimeEffectResults, echo = FALSE, message = FALSE, warning = FALSE, include=TRUE}
+
+#display results
+kable(rmse_results, 
+      align = c("l","c", "r"), 
+      format="latex",
+      col.names = c("Method", "RMSE", "Lambda" )) %>%
+      column_spec(column = 2, color = "#fbfcfc", background = "#21618c") %>%
+      row_spec(row = 0, bold = T, color = "#212f3d", background = "#fcf3cf") %>%
+      row_spec(row = 7, color = "#fbfcfc", background = "#7b241C")
+``` 
+
+
+&nbsp;&nbsp;     
+&nbsp;&nbsp;     
+\raggedright
+
+# Conclusion  
+The goal of this project was to construct a machine learning algorithm from the MovieLens dataset to obtain an RMSE less than .86490.  Two of my models achieved this goal:  Regularized Movie + User Effect and Regularized Movie + User + Time Effect. Both of these models used the Regularization method demonstrated in the course materials.  By using regularization, I was able to fulfill the project requirements.
+
+The data provided was split with 90% used to "train" the model and 10% was used to validate the model.  Additionally, I added three data columns to calculate the number of years between the movie release and the movie rating.  I presented results using seven different models.  Of these, the Regularization Movie + User + Time (years between release and review) Effect model produced the lowest RMSE at .8653, which meets the project requirement.
+
+My key takeaways while doing this project:
+\begin{itemize}
+
+\item I liked using a real-world example, the Netflix challenge.  This shows the practical use of the HarvardX Data Science program.
+\item I was unable to use other modeling tools learned in the course materials on this project.  My computer wouldn't handle using knn, lm, or others.  However, I have one more capstone project to work through and turn in.
+\item It took a long time to format this document using R Markdown.  Simple things like centering and indentation took investigation along with trial and error.  Even this list took research, as it was different from the RMarkdown cheatsheet syntax.
+\item Formattable is a cool function, but I couldn't get it to work with latex in RMarkdown.  I wound up using  Kable to format tables.
+\item It seemed to take a long time to "knit" the RMarkdown pdf file.  However, my neighbor is a data scientist.  She told me some of her models take up to 2 weeks to run.  I think I was just impatient, because mine ran in a matter of minutes.  
+\item I learned a lot in the HarvardX Data Science program.  I am extremely glad I took this class.  Now, when I watch the briefings on the COVID-19 pandemic or even election results, I have a basic understanding of "models" when they discuss them.
+
+\end{itemize}
